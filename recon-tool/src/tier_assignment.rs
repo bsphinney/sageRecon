@@ -250,7 +250,19 @@ fn test_candidate(
         return None;
     }
     let (mut odds, p) = fisher_exact_greater(a, b, c, d);
-    if !odds.is_finite() {
+    if hits_all == 0 {
+        // THE ACCEPTOR IS ABSENT FROM THE WHOLE RUN, so the first column of the
+        // 2x2 is empty and the table says nothing about this candidate: p is 1
+        // and the odds ratio is undefined (SciPy returns NaN). Selenocysteine is
+        // the case: `Carbamidomethyl on U` shares the +57.021 mass with `on C`,
+        // and a run rarely has a confident U peptide. Haldane-Anscombe below would
+        // turn this table into (d + 0.5) / (b + 0.5), the non-band/band ratio --
+        // a property of the peak, not of the candidate -- and that number
+        // outranked the real `on C` odds ratio when the failing candidates were
+        // ranked for the label. Zero keeps it out of that ranking. p is unchanged,
+        // so BH sees the same p-values.
+        odds = 0.0;
+    } else if !odds.is_finite() {
         // Haldane-Anscombe, so an empty cell yields a large finite value rather
         // than an infinity that no threshold can compare.
         odds = ((a as f64 + 0.5) * (d as f64 + 0.5)) / ((b as f64 + 0.5) * (c as f64 + 0.5));
@@ -833,6 +845,57 @@ pub(crate) mod tests {
         match out[1].decision {
             Decision::Satellite { neutrons, .. } => assert_eq!(neutrons, 1),
             ref d => panic!("expected satellite, got {d:?}"),
+        }
+    }
+
+    /// AN ACCEPTOR THAT NO PSM CARRIES MUST NOT NAME A FAILING PEAK.
+    ///
+    /// `Carbamidomethyl on U` and `on C` share one mass. With no U anywhere, the U
+    /// table's first column is empty, and Haldane-Anscombe turned it into the
+    /// non-band/band ratio -- here 180.5 / 20.5 = 8.8 -- which outranked the real
+    /// `on C` odds ratio of 1.0 when the failing candidates were ranked for the
+    /// label, so the report read "Carbamidomethyl on U".
+    #[test]
+    fn absent_acceptor_cannot_name_a_failing_peak() {
+        const MODS: &str = "ID   Carbamidomethyl on C\nTG   C\nPP   Anywhere.\n\
+                            MT   Common Fixed\nCF   H3 C2 N O\n//\n\
+                            ID   Carbamidomethyl on U\nTG   U\nPP   Anywhere.\n\
+                            MT   Common Fixed\nCF   H3 C2 N O\n//\n";
+        let elements: std::collections::HashMap<String, f64> = [
+            ("H", 1.007_825_035),
+            ("C", 12.0),
+            ("N", 14.003_074),
+            ("O", 15.994_914_63),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), *v))
+        .collect();
+        let (db, _) =
+            crate::curated_mods::CuratedDb::load_from_sources(&[("t.txt", MODS)], &elements)
+                .unwrap();
+        // Band: 20 PSMs at +57, 2 with Cys. Outside it: 180, 18 with Cys. No U.
+        // Cys: a=2 b=18 c=18 d=162 -> odds ratio 1.0, not supported.
+        let mut all: Vec<Psm> = (0..2).map(|_| psm("AAACAAA", 57.0215)).collect();
+        all.extend((0..18).map(|_| psm("AAAKAAA", 57.0215)));
+        all.extend((0..18).map(|_| psm("AAACAAA", 5.0)));
+        all.extend((0..162).map(|_| psm("AAAKAAA", 5.0)));
+
+        let band: Vec<&Psm> = all
+            .iter()
+            .filter(|p| p.delta_mass_corrected == 57.0215)
+            .collect();
+        let u = cand("Carbamidomethyl on U", &['U'], "Anywhere.");
+        let (odds, p) = test_candidate(&band, &all, &u, None).expect("testable");
+        assert_eq!(odds, 0.0);
+        assert_eq!(p, 1.0);
+
+        let out = assign(&[(57.0215, 20)], &all, &db, 100.0, None);
+        assert_eq!(out[0].label.as_deref(), Some("Carbamidomethyl on C"));
+        match out[0].decision {
+            Decision::NoResidueSupport { odds_ratio, .. } => {
+                assert!((odds_ratio - 1.0).abs() < 1e-9, "{odds_ratio}")
+            }
+            ref d => panic!("expected no residue support, got {d:?}"),
         }
     }
 }
