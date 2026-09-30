@@ -136,10 +136,16 @@ Releases page:
 | `recon-windows-64.zip` | Windows x86-64 |
 | `recon-apple-silicon.zip` | macOS, Apple Silicon |
 | `recon-apple-intel.zip` | macOS, Intel (10.12 Sierra or later) |
-| `recon-linux-64.tar.gz` | Linux x86-64 |
+| `recon-linux-64.tar.gz` | Linux x86-64 (glibc: see below) |
 
 Each holds the binary, `README.md`, `THIRD_PARTY_LICENSES.md` and `unimod.xml`.
 Unzip it and run the binary; there is nothing to install.
+
+**On Linux, check your glibc.** `ldd --version` prints it. The v0.2.0 Linux
+binary was built on Ubuntu 24.04 and needs glibc 2.39, so on an older system it
+stops with ``version `GLIBC_2.39' not found``. Builds after v0.2.0 are made on
+Ubuntu 22.04 and need glibc 2.34 or later (for example Ubuntu 22.04, Debian 12,
+or RHEL 9 and its rebuilds). On an older system, build from source (below).
 
 **On macOS, the first run is blocked.** Apple has not notarized the binary, so
 macOS stops a copy that was downloaded through a browser. The binary is not
